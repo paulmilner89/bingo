@@ -1,0 +1,678 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- iPhone: prevent zoom on tap, fit to screen width -->
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Bingo Board</title>
+
+<!-- PWA / Add to Home Screen tags -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Bingo">
+<meta name="theme-color" content="#0a0a0a">
+
+<style>
+  :root {
+    --bg: #0a0a0a;
+    --panel: #131313;
+    --off-bg: #181818;
+    --off-border: #2a2a2a;
+    --off-text: #3a3a3a;
+    --on: #ffb000;
+    --on-soft: rgba(255, 176, 0, 0.18);
+    --on-dim: #4a3300;
+    --white: #f2f2f2;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html {
+    /* Fix iOS 100vh bug: use dvh (dynamic viewport height) with vh fallback */
+    height: 100%;
+    height: -webkit-fill-available;
+  }
+  body {
+    height: 100%;
+    height: -webkit-fill-available;
+    background: #000;
+    color: var(--white);
+    font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Helvetica, Arial, sans-serif;
+    overflow: hidden;
+    user-select: none;
+    -webkit-user-select: none;
+    /* Remove tap highlight flash on iOS */
+    -webkit-tap-highlight-color: transparent;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    /* Account for iPhone notch / home indicator */
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+
+  /* The stage locks the entire layout to a 16:9 aspect ratio.
+     Letterboxes appear automatically on viewports that aren't 16:9. */
+  .stage {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    max-width: calc(100vh * 16 / 9);
+    max-height: calc(100vw * 9 / 16);
+    container-type: size;
+    background: var(--bg);
+    overflow: hidden;
+    border-radius: 0;
+  }
+
+  .app {
+    height: 100%;
+    width: 100%;
+    display: grid;
+    grid-template-columns: 24fr 76fr;
+    gap: 0.8cqw;
+    padding: 0.8cqw;
+  }
+
+  .left {
+    display: flex;
+    flex-direction: column;
+    gap: 0.8cqw;
+    min-width: 0;
+    min-height: 0;
+  }
+
+  .display {
+    flex: 1;
+    min-height: 0;
+    background: var(--panel);
+    border: 2px solid var(--off-border);
+    border-radius: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    position: relative;
+  }
+
+  .display::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(circle at center, rgba(255, 176, 0, 0.05), transparent 60%);
+    pointer-events: none;
+  }
+
+  .ball {
+    font-size: min(22cqh, 14cqw);
+    font-weight: 900;
+    color: var(--on);
+    letter-spacing: -0.05em;
+    text-shadow:
+      0 0 32px rgba(255, 176, 0, 0.5),
+      0 0 80px rgba(255, 176, 0, 0.25);
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+    will-change: transform;
+  }
+
+  .ball.empty {
+    color: var(--off-text);
+    text-shadow: none;
+  }
+
+  .ball.mixing {
+    animation: jitter 0.06s infinite;
+  }
+
+  @keyframes jitter {
+    0%   { transform: translate(0, 0)   rotate(0deg); }
+    20%  { transform: translate(-3px, 2px) rotate(-1deg); }
+    40%  { transform: translate(2px, -3px) rotate(1deg); }
+    60%  { transform: translate(-2px, 3px) rotate(-0.5deg); }
+    80%  { transform: translate(3px, 1px)  rotate(0.5deg); }
+    100% { transform: translate(0, 0)   rotate(0deg); }
+  }
+
+  .controls {
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: 0.6cqw;
+  }
+
+  button {
+    font-family: inherit;
+    font-size: min(2.6cqh, 1.7cqw);
+    font-weight: 800;
+    padding: min(2.6cqh, 1.5cqw) 0.6cqw;
+    border: 2px solid var(--off-border);
+    background: var(--panel);
+    color: var(--white);
+    border-radius: 12px;
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    transition: transform 0.1s ease, filter 0.15s ease, opacity 0.15s ease;
+    /* iOS: prevent callout on long press */
+    -webkit-touch-callout: none;
+    touch-action: manipulation;
+  }
+
+  button.primary {
+    background: var(--on);
+    color: #000;
+    border-color: var(--on);
+    box-shadow: 0 0 0 1px rgba(255, 176, 0, 0.2), 0 0 24px rgba(255, 176, 0, 0.2);
+  }
+
+  button:hover:not(:disabled) { filter: brightness(1.12); }
+  button:active:not(:disabled) { transform: translateY(1px); }
+  button:disabled { opacity: 0.35; cursor: not-allowed; }
+
+  .board {
+    background: var(--panel);
+    border: 2px solid var(--off-border);
+    border-radius: 16px;
+    padding: 0.7cqw;
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-rows: minmax(0, 9%) repeat(15, minmax(0, 1fr));
+    grid-auto-flow: column;
+    gap: 0.35cqw;
+    min-width: 0;
+    min-height: 0;
+  }
+
+  .letter, .cell {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 10px;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .letter {
+    font-size: min(7cqh, 5cqw);
+    color: var(--on);
+    background: rgba(255, 176, 0, 0.06);
+    border: 2px solid var(--on);
+    text-shadow: 0 0 14px rgba(255, 176, 0, 0.4);
+  }
+
+  .cell {
+    font-size: min(4.6cqh, 3.8cqw);
+    color: var(--off-text);
+    background: var(--off-bg);
+    border: 1.5px solid var(--off-border);
+    transition: color 0.25s ease, background 0.25s ease, border-color 0.25s ease, text-shadow 0.25s ease;
+  }
+
+  .cell.lit {
+    color: var(--on);
+    background: var(--on-soft);
+    border-color: var(--on);
+    text-shadow: 0 0 10px rgba(255, 176, 0, 0.55);
+  }
+
+  .cell.flashing {
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% {
+      color: var(--on);
+      background: rgba(255, 176, 0, 0.28);
+      border-color: var(--on);
+      text-shadow: 0 0 14px rgba(255, 176, 0, 0.9), 0 0 28px rgba(255, 176, 0, 0.45);
+    }
+    50% {
+      color: var(--on-dim);
+      background: var(--off-bg);
+      border-color: var(--on-dim);
+      text-shadow: none;
+    }
+  }
+
+  /* iPhone: replace fullscreen button with "Add to Home Screen" tip */
+  .fs-toggle {
+    position: fixed;
+    top: max(0.6rem, env(safe-area-inset-top));
+    right: max(0.6rem, env(safe-area-inset-right));
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.85rem;
+    border-radius: 10px;
+    border: 1.5px solid var(--on);
+    background: rgba(0, 0, 0, 0.65);
+    color: var(--on);
+    font-family: inherit;
+    font-size: 0.95rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    line-height: 1;
+    cursor: pointer;
+    opacity: 0.9;
+    transition: opacity 0.25s ease, transform 0.1s ease, filter 0.15s ease;
+    z-index: 20;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .fs-toggle .icon { font-size: 1.1rem; }
+  .fs-toggle:hover { filter: brightness(1.15); }
+  .fs-toggle:active { transform: translateY(1px); }
+
+  /* Hide fullscreen button when running as installed PWA (standalone mode) */
+  @media (display-mode: standalone) {
+    .fs-toggle { display: none; }
+  }
+
+  :fullscreen .fs-toggle,
+  :-webkit-full-screen .fs-toggle {
+    border-color: var(--off-border);
+    color: var(--off-text);
+    background: transparent;
+    opacity: 0.35;
+    padding: 0.35rem 0.6rem;
+    font-size: 0.75rem;
+  }
+  :fullscreen .fs-toggle .label,
+  :-webkit-full-screen .fs-toggle .label { display: none; }
+
+  .count {
+    position: absolute;
+    bottom: max(0.7cqw, env(safe-area-inset-bottom));
+    right: 0.9cqw;
+    color: var(--off-text);
+    font-size: 1.1cqh;
+    letter-spacing: 0.15em;
+    font-variant-numeric: tabular-nums;
+    pointer-events: none;
+  }
+
+  /* Confirmation modal for Clear */
+  .modal {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.72);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.18s ease;
+    z-index: 30;
+  }
+  .modal.open {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .modal-card {
+    background: var(--panel);
+    border: 2px solid var(--on);
+    border-radius: 18px;
+    padding: min(4.5cqh, 3.2cqw) min(5cqh, 4cqw);
+    max-width: 60cqw;
+    text-align: center;
+    box-shadow: 0 0 60px rgba(255, 176, 0, 0.25);
+    transform: scale(0.96);
+    transition: transform 0.18s ease;
+  }
+  .modal.open .modal-card {
+    transform: scale(1);
+  }
+
+  .modal-card h2 {
+    font-size: min(4.5cqh, 3cqw);
+    color: var(--on);
+    margin-bottom: min(1.5cqh, 1.2cqw);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    font-weight: 900;
+    line-height: 1.1;
+  }
+  .modal-card p {
+    font-size: min(2.6cqh, 1.8cqw);
+    color: var(--white);
+    margin-bottom: min(3cqh, 2.2cqw);
+    opacity: 0.85;
+    line-height: 1.4;
+  }
+
+  .modal-actions {
+    display: flex;
+    gap: min(1.5cqh, 1.2cqw);
+    justify-content: center;
+  }
+  .modal-actions button {
+    font-size: min(2.2cqh, 1.5cqw);
+    padding: min(2cqh, 1.4cqw) min(3cqh, 2.2cqw);
+    min-width: min(20cqh, 14cqw);
+  }
+
+  /* "Add to Home Screen" tip banner — shown only on iOS Safari, not when installed */
+  .install-tip {
+    display: none;
+    position: fixed;
+    bottom: max(1rem, env(safe-area-inset-bottom, 1rem));
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(20, 20, 20, 0.95);
+    border: 1.5px solid var(--on);
+    border-radius: 12px;
+    padding: 0.6rem 1rem;
+    color: var(--white);
+    font-size: 0.8rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+    z-index: 40;
+    pointer-events: none;
+    animation: fadeOut 0.4s ease 6s forwards;
+  }
+  .install-tip span { color: var(--on); }
+  @keyframes fadeOut {
+    to { opacity: 0; }
+  }
+</style>
+</head>
+<body>
+  <button class="fs-toggle" id="fsToggle" title="Toggle Fullscreen (F)">
+    <span class="icon">⤢</span><span class="label">Fullscreen</span>
+  </button>
+
+  <div class="install-tip" id="installTip">
+    Tap <span>⎙ Share</span> → <span>Add to Home Screen</span> for the best experience
+  </div>
+
+  <div class="stage">
+    <div class="app">
+      <div class="left">
+        <div class="display">
+          <div id="ball" class="ball empty">--</div>
+        </div>
+        <div class="controls">
+          <button id="pull" class="primary">Pull Ball</button>
+          <button id="clear">Clear</button>
+        </div>
+      </div>
+      <div class="board" id="board"></div>
+    </div>
+    <div class="count"><span id="count">0</span> / 75</div>
+
+    <div class="modal" id="confirmModal" aria-hidden="true">
+      <div class="modal-card" role="dialog" aria-labelledby="confirmTitle">
+        <h2 id="confirmTitle">Clear the Board?</h2>
+        <p><span id="confirmCount">0</span> numbers have been called. This cannot be undone.</p>
+        <div class="modal-actions">
+          <button id="confirmCancel">Cancel</button>
+          <button id="confirmOk" class="primary">Clear Board</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+  const LETTERS = ['B', 'I', 'N', 'G', 'O'];
+  const TOTAL = 75;
+
+  const boardEl  = document.getElementById('board');
+  const ballEl   = document.getElementById('ball');
+  const pullBtn  = document.getElementById('pull');
+  const clearBtn = document.getElementById('clear');
+  const countEl  = document.getElementById('count');
+  const fsBtn    = document.getElementById('fsToggle');
+  const modalEl         = document.getElementById('confirmModal');
+  const confirmCountEl  = document.getElementById('confirmCount');
+  const confirmOkBtn    = document.getElementById('confirmOk');
+  const confirmCancelBtn = document.getElementById('confirmCancel');
+  let modalOpen = false;
+
+  const cellMap = {};
+  const drawn = new Set();
+  let flashingNum = null;
+  let mixing = false;
+
+  // Build the called-numbers board: BINGO header row across the top,
+  // 15 numbers stacked vertically under each letter (grid-auto-flow: column).
+  for (let col = 0; col < 5; col++) {
+    const letterEl = document.createElement('div');
+    letterEl.className = 'letter';
+    letterEl.textContent = LETTERS[col];
+    boardEl.appendChild(letterEl);
+
+    for (let row = 0; row < 15; row++) {
+      const num = col * 15 + row + 1;
+      const cell = document.createElement('div');
+      cell.className = 'cell';
+      cell.textContent = num;
+      boardEl.appendChild(cell);
+      cellMap[num] = cell;
+    }
+  }
+
+  const letterFor  = n => LETTERS[Math.floor((n - 1) / 15)];
+  const formatBall = n => letterFor(n) + n;
+
+  function remainingNumbers() {
+    const out = [];
+    for (let i = 1; i <= TOTAL; i++) if (!drawn.has(i)) out.push(i);
+    return out;
+  }
+
+  function setBall(text, empty = false) {
+    ballEl.textContent = text;
+    ballEl.classList.toggle('empty', empty);
+  }
+
+  function updateCount() { countEl.textContent = drawn.size; }
+
+  // ----- Cage spin sound (Web Audio, synthesized — no external files) -----
+  let audioCtx = null;
+  function getAudio() {
+    if (!audioCtx) {
+      const Ctor = window.AudioContext || window.webkitAudioContext;
+      if (!Ctor) return null;
+      audioCtx = new Ctor();
+    }
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    return audioCtx;
+  }
+
+  // Build a fresh buffer each call so the click pattern varies between pulls.
+  function makeCageBuffer(ctx, dur) {
+    const sr  = ctx.sampleRate;
+    const len = Math.floor(dur * sr);
+    const buf = ctx.createBuffer(1, len, sr);
+    const data = buf.getChannelData(0);
+
+    // Continuous low-level rattle (bed of noise).
+    for (let i = 0; i < len; i++) data[i] = (Math.random() * 2 - 1) * 0.18;
+
+    // Random short impulses = individual ball clicks against the cage.
+    const clicks = Math.floor(dur * 42);
+    for (let c = 0; c < clicks; c++) {
+      const start    = Math.floor(Math.random() * (len - 600));
+      const clickLen = Math.floor((0.003 + Math.random() * 0.010) * sr);
+      const amp      = 0.4 + Math.random() * 0.6;
+      for (let i = 0; i < clickLen && start + i < len; i++) {
+        const env = Math.exp(-i / (clickLen * 0.25));
+        data[start + i] += (Math.random() * 2 - 1) * env * amp;
+      }
+    }
+
+    // Soft saturate so peaks stay musical.
+    for (let i = 0; i < len; i++) data[i] = Math.tanh(data[i] * 0.9);
+    return buf;
+  }
+
+  function playCageSound(animDurMs) {
+    const ctx = getAudio();
+    if (!ctx) return;
+    const animDur  = animDurMs / 1000;
+    const fadeIn   = 0.01;
+    const fadeOut  = 0.7;
+    const totalDur = animDur + fadeOut;
+    const peak     = 0.45;
+    const now      = ctx.currentTime;
+
+    const src = ctx.createBufferSource();
+    src.buffer = makeCageBuffer(ctx, totalDur + 0.2);
+
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = 2400;
+    bp.Q.value = 0.6;
+
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.exponentialRampToValueAtTime(peak,    now + fadeIn);
+    g.gain.setValueAtTime(peak,                  now + animDur);
+    g.gain.exponentialRampToValueAtTime(0.0001,  now + animDur + fadeOut);
+
+    src.playbackRate.setValueAtTime(1.0, now);
+    src.playbackRate.setValueAtTime(1.0, now + animDur);
+    src.playbackRate.linearRampToValueAtTime(0.45, now + animDur + fadeOut);
+
+    src.connect(bp);
+    bp.connect(g);
+    g.connect(ctx.destination);
+
+    src.start(now);
+    src.stop(now + totalDur + 0.05);
+  }
+
+  function pull() {
+    if (mixing) return;
+    if (drawn.size >= TOTAL) return;
+
+    if (flashingNum !== null) {
+      const prev = cellMap[flashingNum];
+      prev.classList.remove('flashing');
+      prev.classList.add('lit');
+    }
+
+    const pool = remainingNumbers();
+    if (pool.length === 0) return;
+    const next = pool[Math.floor(Math.random() * pool.length)];
+
+    mixing = true;
+    pullBtn.disabled = true;
+    clearBtn.disabled = true;
+    ballEl.classList.remove('empty');
+    ballEl.classList.add('mixing');
+
+    const totalDuration = 2200;
+    playCageSound(totalDuration);
+    const start = performance.now();
+    let lastFlip = 0;
+
+    function frame(now) {
+      const elapsed = now - start;
+      const t = Math.min(elapsed / totalDuration, 1);
+
+      if (t >= 1) {
+        ballEl.classList.remove('mixing');
+        setBall(formatBall(next));
+        drawn.add(next);
+        cellMap[next].classList.add('flashing');
+        flashingNum = next;
+        mixing = false;
+        pullBtn.disabled  = drawn.size >= TOTAL;
+        clearBtn.disabled = false;
+        updateCount();
+        return;
+      }
+
+      const interval = 40 + 160 * (t * t);
+      if (now - lastFlip >= interval) {
+        const r = pool[Math.floor(Math.random() * pool.length)];
+        setBall(formatBall(r));
+        lastFlip = now;
+      }
+      requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+  }
+
+  function doClearAll() {
+    if (mixing) return;
+    drawn.clear();
+    flashingNum = null;
+    for (const cell of Object.values(cellMap)) {
+      cell.classList.remove('lit', 'flashing');
+    }
+    setBall('--', true);
+    pullBtn.disabled = false;
+    updateCount();
+  }
+
+  function openConfirm() {
+    if (mixing) return;
+    if (drawn.size === 0) { doClearAll(); return; }
+    confirmCountEl.textContent = drawn.size;
+    modalEl.classList.add('open');
+    modalEl.setAttribute('aria-hidden', 'false');
+    modalOpen = true;
+  }
+
+  function closeConfirm() {
+    modalEl.classList.remove('open');
+    modalEl.setAttribute('aria-hidden', 'true');
+    modalOpen = false;
+  }
+
+  pullBtn.addEventListener('click', pull);
+  clearBtn.addEventListener('click', openConfirm);
+
+  confirmOkBtn.addEventListener('click', () => { closeConfirm(); doClearAll(); });
+  confirmCancelBtn.addEventListener('click', closeConfirm);
+  modalEl.addEventListener('click', (e) => { if (e.target === modalEl) closeConfirm(); });
+
+  document.addEventListener('keydown', (e) => {
+    if (modalOpen) {
+      if (e.key === 'Escape')      { e.preventDefault(); closeConfirm(); }
+      else if (e.key === 'Enter')  { e.preventDefault(); closeConfirm(); doClearAll(); }
+      return;
+    }
+    if (e.target instanceof HTMLButtonElement) return;
+    if (e.code === 'Space')              { e.preventDefault(); pull(); }
+    else if (e.key.toLowerCase() === 'c') { openConfirm(); }
+    else if (e.key.toLowerCase() === 'f') { toggleFullscreen(); }
+  });
+
+  function toggleFullscreen() {
+    if (!document.fullscreenElement) document.documentElement.requestFullscreen?.();
+    else document.exitFullscreen?.();
+  }
+  fsBtn.addEventListener('click', toggleFullscreen);
+
+  // ── iOS "Add to Home Screen" tip ──────────────────────────────────────────
+  // Show a brief hint on first visit if running in mobile Safari (not already installed)
+  const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  const isStandalone = window.navigator.standalone === true;
+  const isSafari = /safari/i.test(navigator.userAgent) && !/crios|fxios|opios/i.test(navigator.userAgent);
+
+  if (isIOS && !isStandalone && isSafari) {
+    // Only show once per session
+    if (!sessionStorage.getItem('tipShown')) {
+      sessionStorage.setItem('tipShown', '1');
+      const tip = document.getElementById('installTip');
+      tip.style.display = 'block';
+      setTimeout(() => tip.remove(), 7000);
+    }
+  }
+
+  // Hide the fullscreen button on iOS (Fullscreen API not supported)
+  if (isIOS) {
+    fsBtn.style.display = 'none';
+  }
+</script>
+</body>
+</html>
