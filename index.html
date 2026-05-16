@@ -2,16 +2,8 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<!-- iPhone: prevent zoom on tap, fit to screen width -->
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Bingo Board</title>
-
-<!-- PWA / Add to Home Screen tags -->
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Bingo">
-<meta name="theme-color" content="#0a0a0a">
-
 <style>
   :root {
     --bg: #0a0a0a;
@@ -25,42 +17,32 @@
     --white: #f2f2f2;
   }
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-  html {
-    /* Fix iOS 100vh bug: use dvh (dynamic viewport height) with vh fallback */
+  html, body {
     height: 100%;
-    height: -webkit-fill-available;
-  }
-  body {
-    height: 100%;
-    height: -webkit-fill-available;
     background: #000;
     color: var(--white);
     font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Helvetica, Arial, sans-serif;
     overflow: hidden;
     user-select: none;
     -webkit-user-select: none;
-    /* Remove tap highlight flash on iOS */
-    -webkit-tap-highlight-color: transparent;
+  }
+  body {
     display: flex;
     align-items: center;
     justify-content: center;
-    /* Account for iPhone notch / home indicator */
-    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
   }
 
   /* The stage locks the entire layout to a 16:9 aspect ratio.
      Letterboxes appear automatically on viewports that aren't 16:9. */
   .stage {
     position: relative;
-    width: 100%;
-    height: 100%;
+    width: 100vw;
+    height: 100vh;
     max-width: calc(100vh * 16 / 9);
     max-height: calc(100vw * 9 / 16);
     container-type: size;
     background: var(--bg);
     overflow: hidden;
-    border-radius: 0;
   }
 
   .app {
@@ -102,7 +84,7 @@
   }
 
   .ball {
-    font-size: min(22cqh, 14cqw);
+    font-size: min(22cqh, 11cqw);
     font-weight: 900;
     color: var(--on);
     letter-spacing: -0.05em;
@@ -151,9 +133,6 @@
     text-transform: uppercase;
     letter-spacing: 0.12em;
     transition: transform 0.1s ease, filter 0.15s ease, opacity 0.15s ease;
-    /* iOS: prevent callout on long press */
-    -webkit-touch-callout: none;
-    touch-action: manipulation;
   }
 
   button.primary {
@@ -235,11 +214,12 @@
     }
   }
 
-  /* iPhone: replace fullscreen button with "Add to Home Screen" tip */
+  /* Fullscreen button — large enough to be obvious before fullscreen,
+     fades to subtle once the user is in fullscreen. */
   .fs-toggle {
     position: fixed;
-    top: max(0.6rem, env(safe-area-inset-top));
-    right: max(0.6rem, env(safe-area-inset-right));
+    top: 0.6rem;
+    right: 0.6rem;
     display: flex;
     align-items: center;
     gap: 0.5rem;
@@ -258,18 +238,10 @@
     opacity: 0.9;
     transition: opacity 0.25s ease, transform 0.1s ease, filter 0.15s ease;
     z-index: 20;
-    touch-action: manipulation;
-    -webkit-tap-highlight-color: transparent;
   }
   .fs-toggle .icon { font-size: 1.1rem; }
   .fs-toggle:hover { filter: brightness(1.15); }
   .fs-toggle:active { transform: translateY(1px); }
-
-  /* Hide fullscreen button when running as installed PWA (standalone mode) */
-  @media (display-mode: standalone) {
-    .fs-toggle { display: none; }
-  }
-
   :fullscreen .fs-toggle,
   :-webkit-full-screen .fs-toggle {
     border-color: var(--off-border);
@@ -284,7 +256,7 @@
 
   .count {
     position: absolute;
-    bottom: max(0.7cqw, env(safe-area-inset-bottom));
+    bottom: 0.7cqw;
     right: 0.9cqw;
     color: var(--off-text);
     font-size: 1.1cqh;
@@ -355,41 +327,12 @@
     padding: min(2cqh, 1.4cqw) min(3cqh, 2.2cqw);
     min-width: min(20cqh, 14cqw);
   }
-
-  /* "Add to Home Screen" tip banner — shown only on iOS Safari, not when installed */
-  .install-tip {
-    display: none;
-    position: fixed;
-    bottom: max(1rem, env(safe-area-inset-bottom, 1rem));
-    left: 50%;
-    transform: translateX(-50%);
-    background: rgba(20, 20, 20, 0.95);
-    border: 1.5px solid var(--on);
-    border-radius: 12px;
-    padding: 0.6rem 1rem;
-    color: var(--white);
-    font-size: 0.8rem;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    white-space: nowrap;
-    z-index: 40;
-    pointer-events: none;
-    animation: fadeOut 0.4s ease 6s forwards;
-  }
-  .install-tip span { color: var(--on); }
-  @keyframes fadeOut {
-    to { opacity: 0; }
-  }
 </style>
 </head>
 <body>
   <button class="fs-toggle" id="fsToggle" title="Toggle Fullscreen (F)">
     <span class="icon">⤢</span><span class="label">Fullscreen</span>
   </button>
-
-  <div class="install-tip" id="installTip">
-    Tap <span>⎙ Share</span> → <span>Add to Home Screen</span> for the best experience
-  </div>
 
   <div class="stage">
     <div class="app">
@@ -516,8 +459,8 @@
     const ctx = getAudio();
     if (!ctx) return;
     const animDur  = animDurMs / 1000;
-    const fadeIn   = 0.01;
-    const fadeOut  = 0.7;
+    const fadeIn   = 0.01;   // ~10ms — imperceptible, but avoids click on transient
+    const fadeOut  = 0.7;    // tail length AFTER the animation ends
     const totalDur = animDur + fadeOut;
     const peak     = 0.45;
     const now      = ctx.currentTime;
@@ -525,17 +468,22 @@
     const src = ctx.createBufferSource();
     src.buffer = makeCageBuffer(ctx, totalDur + 0.2);
 
+    // Bandpass shapes the noise into a metallic clatter.
     const bp = ctx.createBiquadFilter();
     bp.type = 'bandpass';
     bp.frequency.value = 2400;
     bp.Q.value = 0.6;
 
+    // Cage spins at full intensity through the animation, then winds down
+    // once the ball has been picked.
     const g = ctx.createGain();
     g.gain.setValueAtTime(0.0001, now);
     g.gain.exponentialRampToValueAtTime(peak,    now + fadeIn);
     g.gain.setValueAtTime(peak,                  now + animDur);
     g.gain.exponentialRampToValueAtTime(0.0001,  now + animDur + fadeOut);
 
+    // Playback rate stays at 1× through the spin, then slows down only after
+    // the ball lands — sounds like the cage coming to a stop.
     src.playbackRate.setValueAtTime(1.0, now);
     src.playbackRate.setValueAtTime(1.0, now + animDur);
     src.playbackRate.linearRampToValueAtTime(0.45, now + animDur + fadeOut);
@@ -615,7 +563,7 @@
 
   function openConfirm() {
     if (mixing) return;
-    if (drawn.size === 0) { doClearAll(); return; }
+    if (drawn.size === 0) { doClearAll(); return; }  // nothing to confirm
     confirmCountEl.textContent = drawn.size;
     modalEl.classList.add('open');
     modalEl.setAttribute('aria-hidden', 'false');
@@ -652,27 +600,6 @@
     else document.exitFullscreen?.();
   }
   fsBtn.addEventListener('click', toggleFullscreen);
-
-  // ── iOS "Add to Home Screen" tip ──────────────────────────────────────────
-  // Show a brief hint on first visit if running in mobile Safari (not already installed)
-  const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
-  const isStandalone = window.navigator.standalone === true;
-  const isSafari = /safari/i.test(navigator.userAgent) && !/crios|fxios|opios/i.test(navigator.userAgent);
-
-  if (isIOS && !isStandalone && isSafari) {
-    // Only show once per session
-    if (!sessionStorage.getItem('tipShown')) {
-      sessionStorage.setItem('tipShown', '1');
-      const tip = document.getElementById('installTip');
-      tip.style.display = 'block';
-      setTimeout(() => tip.remove(), 7000);
-    }
-  }
-
-  // Hide the fullscreen button on iOS (Fullscreen API not supported)
-  if (isIOS) {
-    fsBtn.style.display = 'none';
-  }
 </script>
 </body>
 </html>
