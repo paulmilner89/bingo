@@ -32,8 +32,6 @@
     justify-content: center;
   }
 
-  /* The stage locks the entire layout to a 16:9 aspect ratio.
-     Letterboxes appear automatically on viewports that aren't 16:9. */
   .stage {
     position: relative;
     width: 100vw;
@@ -83,8 +81,27 @@
     pointer-events: none;
   }
 
+  .display.mixer { padding: 0; }
+  .display.mixer::before { display: none; }
+  .display.mixer canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+
+  /* Reveal canvas overlays the top display and animates the ball rise + spin. */
+  #revealCanvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    opacity: 0;
+    z-index: 2;
+  }
+
   .ball {
-    font-size: min(22cqh, 11cqw);
+    font-size: min(20cqh, 11cqw);
     font-weight: 900;
     color: var(--on);
     letter-spacing: -0.05em;
@@ -93,7 +110,9 @@
       0 0 80px rgba(255, 176, 0, 0.25);
     line-height: 1;
     font-variant-numeric: tabular-nums;
-    will-change: transform;
+    will-change: transform, opacity;
+    position: relative;
+    z-index: 1;
   }
 
   .ball.empty {
@@ -101,17 +120,19 @@
     text-shadow: none;
   }
 
-  .ball.mixing {
-    animation: jitter 0.06s infinite;
+  .ball.hidden {
+    opacity: 0;
+    transform: scale(0.35);
+    transition: opacity 0.3s ease-in, transform 0.3s ease-in;
   }
 
-  @keyframes jitter {
-    0%   { transform: translate(0, 0)   rotate(0deg); }
-    20%  { transform: translate(-3px, 2px) rotate(-1deg); }
-    40%  { transform: translate(2px, -3px) rotate(1deg); }
-    60%  { transform: translate(-2px, 3px) rotate(-0.5deg); }
-    80%  { transform: translate(3px, 1px)  rotate(0.5deg); }
-    100% { transform: translate(0, 0)   rotate(0deg); }
+  .ball.revealing {
+    animation: ballReveal 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+  }
+  @keyframes ballReveal {
+    0%   { opacity: 0; transform: scale(0.65); }
+    55%  { opacity: 1; transform: scale(1.08); }
+    100% { opacity: 1; transform: scale(1); }
   }
 
   .controls {
@@ -146,16 +167,17 @@
   button:active:not(:disabled) { transform: translateY(1px); }
   button:disabled { opacity: 0.35; cursor: not-allowed; }
 
+  /* Vertical callboard: BINGO across the top, 15 numbers stacked per column. */
   .board {
     background: var(--panel);
     border: 2px solid var(--off-border);
     border-radius: 16px;
-    padding: 0.7cqw;
+    padding: 0.75cqw;
     display: grid;
     grid-template-columns: repeat(5, minmax(0, 1fr));
     grid-template-rows: minmax(0, 9%) repeat(15, minmax(0, 1fr));
     grid-auto-flow: column;
-    gap: 0.35cqw;
+    gap: 0.4cqw;
     min-width: 0;
     min-height: 0;
   }
@@ -214,8 +236,6 @@
     }
   }
 
-  /* Fullscreen button — large enough to be obvious before fullscreen,
-     fades to subtle once the user is in fullscreen. */
   .fs-toggle {
     position: fixed;
     top: 0.6rem;
@@ -265,7 +285,6 @@
     pointer-events: none;
   }
 
-  /* Confirmation modal for Clear */
   .modal {
     position: absolute;
     inset: 0;
@@ -296,9 +315,7 @@
     transform: scale(0.96);
     transition: transform 0.18s ease;
   }
-  .modal.open .modal-card {
-    transform: scale(1);
-  }
+  .modal.open .modal-card { transform: scale(1); }
 
   .modal-card h2 {
     font-size: min(4.5cqh, 3cqw);
@@ -339,6 +356,10 @@
       <div class="left">
         <div class="display">
           <div id="ball" class="ball empty">--</div>
+          <canvas id="revealCanvas"></canvas>
+        </div>
+        <div class="display mixer">
+          <canvas id="mixerCanvas"></canvas>
         </div>
         <div class="controls">
           <button id="pull" class="primary">Pull Ball</button>
@@ -365,12 +386,14 @@
   const LETTERS = ['B', 'I', 'N', 'G', 'O'];
   const TOTAL = 75;
 
-  const boardEl  = document.getElementById('board');
-  const ballEl   = document.getElementById('ball');
-  const pullBtn  = document.getElementById('pull');
-  const clearBtn = document.getElementById('clear');
-  const countEl  = document.getElementById('count');
-  const fsBtn    = document.getElementById('fsToggle');
+  const boardEl     = document.getElementById('board');
+  const ballEl      = document.getElementById('ball');
+  const pullBtn     = document.getElementById('pull');
+  const clearBtn    = document.getElementById('clear');
+  const countEl     = document.getElementById('count');
+  const fsBtn       = document.getElementById('fsToggle');
+  const mixerCanvas = document.getElementById('mixerCanvas');
+  const revealCanvas = document.getElementById('revealCanvas');
   const modalEl         = document.getElementById('confirmModal');
   const confirmCountEl  = document.getElementById('confirmCount');
   const confirmOkBtn    = document.getElementById('confirmOk');
@@ -382,14 +405,11 @@
   let flashingNum = null;
   let mixing = false;
 
-  // Build the called-numbers board: BINGO header row across the top,
-  // 15 numbers stacked vertically under each letter (grid-auto-flow: column).
   for (let col = 0; col < 5; col++) {
     const letterEl = document.createElement('div');
     letterEl.className = 'letter';
     letterEl.textContent = LETTERS[col];
     boardEl.appendChild(letterEl);
-
     for (let row = 0; row < 15; row++) {
       const num = col * 15 + row + 1;
       const cell = document.createElement('div');
@@ -416,7 +436,357 @@
 
   function updateCount() { countEl.textContent = drawn.size; }
 
-  // ----- Cage spin sound (Web Audio, synthesized — no external files) -----
+  // ===== Ball Mixer: gravity-driven bouncing, ball count tracks remaining pool =====
+  // Each Pull fades one ball out; Clear pours in the missing balls from above.
+  class BallMixer {
+    constructor(canvas) {
+      this.canvas = canvas;
+      this.ctx = canvas.getContext('2d');
+      this.balls = [];
+      this.running = false;
+      this.w = 0;
+      this.h = 0;
+      this.baseRadius = 0;
+      this.gravity = 0;
+      this._resize();
+      const ro = new ResizeObserver(() => this._resize());
+      ro.observe(canvas);
+    }
+
+    _resize() {
+      const rect = this.canvas.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) return;
+      const dpr = window.devicePixelRatio || 1;
+      this.canvas.width  = Math.round(rect.width  * dpr);
+      this.canvas.height = Math.round(rect.height * dpr);
+      this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      this.w = rect.width;
+      this.h = rect.height;
+      this.baseRadius = Math.min(this.w, this.h) * 0.058;
+      this.gravity = this.h * 2.6;
+      this._clampBalls();
+    }
+
+    _clampBalls() {
+      for (const b of this.balls) {
+        b.x = Math.max(b.r, Math.min(this.w - b.r, b.x));
+        // Don't clamp y — balls above the canvas (during pour-in) should stay above.
+      }
+    }
+
+    _launchVy(minH, maxH) {
+      const targetHeight = (minH + Math.random() * (maxH - minH)) * this.h;
+      return Math.sqrt(2 * this.gravity * targetHeight);
+    }
+
+    // Pour `count` fresh balls in from above the canvas. Each spawns at a random
+    // y above the top edge with downward velocity, so they enter the visible
+    // area at staggered times naturally.
+    pourIn(count) {
+      if (this.w === 0 || this.h === 0) {
+        // Retry once the canvas has known dimensions.
+        requestAnimationFrame(() => this.pourIn(count));
+        return;
+      }
+      const r = this.baseRadius;
+      const spreadPx = this.h * 1.8;
+      for (let i = 0; i < count; i++) {
+        this.balls.push({
+          x:  r + Math.random() * Math.max(1, this.w - 2 * r),
+          y:  -r - Math.random() * spreadPx,
+          vx: (Math.random() - 0.5) * this.w * 0.7,
+          vy: 150 + Math.random() * 400,
+          r,
+          opacity: 1,
+          fadingOut: false,
+          fadeStart: 0,
+        });
+      }
+    }
+
+    // Bring the mixer back to `target` balls, only pouring in the missing ones.
+    replenishTo(target) {
+      // Only count non-fading balls.
+      let alive = 0;
+      for (const b of this.balls) if (!b.fadingOut) alive++;
+      const needed = target - alive;
+      if (needed > 0) this.pourIn(needed);
+    }
+
+    // Fade the highest-in-view (smallest y) ball out over 400ms.
+    removeBall() {
+      if (this.w === 0 || this.h === 0) return;
+      // Prefer a ball that is inside the visible area and not already fading.
+      let idx = -1;
+      let bestY = Infinity;
+      for (let i = 0; i < this.balls.length; i++) {
+        const b = this.balls[i];
+        if (b.fadingOut) continue;
+        if (b.y - b.r > this.h || b.y + b.r < 0) continue;  // off-canvas
+        if (b.y < bestY) { bestY = b.y; idx = i; }
+      }
+      // Fall back to any non-fading ball if all visible ones are fading.
+      if (idx === -1) {
+        for (let i = 0; i < this.balls.length; i++) {
+          if (!this.balls[i].fadingOut) { idx = i; break; }
+        }
+      }
+      if (idx === -1) return;
+      this.balls[idx].fadingOut = true;
+      this.balls[idx].fadeStart = performance.now();
+    }
+
+    liveCount() {
+      let n = 0;
+      for (const b of this.balls) if (!b.fadingOut) n++;
+      return n;
+    }
+
+    start() {
+      if (this.running) return;
+      this.running = true;
+      this._lastNow = performance.now();
+      if (!this._boundLoop) this._boundLoop = this._loop.bind(this);
+      requestAnimationFrame(this._boundLoop);
+    }
+
+    stop() { this.running = false; }
+
+    _loop(now) {
+      if (!this.running) return;
+      const dt = Math.min(1/30, (now - this._lastNow) / 1000);
+      this._lastNow = now;
+      this._update(dt, now);
+      this._draw();
+      requestAnimationFrame(this._boundLoop);
+    }
+
+    _update(dt, now) {
+      const w = this.w, h = this.h, g = this.gravity;
+      // Physics
+      for (const b of this.balls) {
+        b.vy += g * dt;
+        b.x  += b.vx * dt;
+        b.y  += b.vy * dt;
+
+        if (b.x - b.r < 0)      { b.x = b.r;         b.vx = Math.abs(b.vx) * 0.85; }
+        else if (b.x + b.r > w) { b.x = w - b.r;     b.vx = -Math.abs(b.vx) * 0.85; }
+
+        if (b.y + b.r > h) {
+          b.y  = h - b.r;
+          b.vy = -this._launchVy(0.3, 1.1);
+          b.vx = (Math.random() - 0.5) * w * 1.1;
+        }
+      }
+      // Fade out any ball marked for removal; splice when opacity reaches 0.
+      for (let i = this.balls.length - 1; i >= 0; i--) {
+        const b = this.balls[i];
+        if (b.fadingOut) {
+          const elapsed = now - b.fadeStart;
+          b.opacity = Math.max(0, 1 - elapsed / 400);
+          if (b.opacity <= 0) this.balls.splice(i, 1);
+        }
+      }
+    }
+
+    _draw() {
+      const ctx = this.ctx;
+      ctx.clearRect(0, 0, this.w, this.h);
+
+      // Shadows (only for balls actually in view).
+      const floorY = this.h - 1;
+      for (const b of this.balls) {
+        if (b.y + b.r < 0 || b.y - b.r > this.h) continue;  // off-canvas
+        const heightRatio = Math.max(0, Math.min(1, b.y / this.h));
+        const scale = 0.45 + 0.55 * heightRatio;
+        const alpha = (0.12 + 0.35 * heightRatio) * b.opacity;
+        ctx.fillStyle = `rgba(0, 0, 0, ${alpha})`;
+        ctx.beginPath();
+        ctx.ellipse(b.x, floorY, b.r * 0.9 * scale, b.r * 0.18 * scale, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Back-to-front by y for layered depth. Same-size balls, but stacking
+      // still reads as depth because of the overlap.
+      const order = this.balls.slice().sort((a, b) => a.y - b.y);
+      for (const b of order) {
+        if (b.y + b.r < 0) continue;  // above canvas, hidden
+        ctx.globalAlpha = b.opacity;
+
+        const grad = ctx.createRadialGradient(
+          b.x - b.r * 0.4, b.y - b.r * 0.4, 0,
+          b.x,             b.y,             b.r
+        );
+        grad.addColorStop(0.0, '#ffe598');
+        grad.addColorStop(0.45, '#ffb000');
+        grad.addColorStop(1.0, '#6a4200');
+
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.strokeStyle = '#0a0a0a';
+        ctx.lineWidth = Math.max(1.5, b.r * 0.06);
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  // ===== Reveal panel: rise + grow + spin-flip on the top display's canvas =====
+  class RevealPanel {
+    constructor(canvas) {
+      this.canvas = canvas;
+      this.ctx = canvas.getContext('2d');
+      this.w = 0;
+      this.h = 0;
+      this.centerX = 0;
+      this.centerY = 0;
+      this.ballRadius = 0;
+      this.numberFont = 0;
+      this.running = false;
+      this.numberText = '';
+      this._resize();
+      const ro = new ResizeObserver(() => this._resize());
+      ro.observe(canvas);
+    }
+
+    _resize() {
+      const rect = this.canvas.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) return;
+      const dpr = window.devicePixelRatio || 1;
+      this.canvas.width  = Math.round(rect.width * dpr);
+      this.canvas.height = Math.round(rect.height * dpr);
+      this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      this.w = rect.width;
+      this.h = rect.height;
+      this.centerX = this.w / 2;
+      this.centerY = this.h / 2;
+      // Ball size fills most of the panel; number size matched to DOM ball font
+      // so the canvas-to-DOM handoff cross-fade is visually seamless.
+      this.ballRadius = Math.min(this.w, this.h) * 0.42;
+      this.numberFont = Math.min(this.h * 0.62, this.w * 0.47);
+    }
+
+    play(numberText, onComplete) {
+      this._resize();
+      this.numberText = numberText;
+      this.onComplete = onComplete;
+      this.running = true;
+      this.startTime = performance.now();
+      this.canvas.style.transition = 'none';
+      this.canvas.style.opacity = '1';
+      if (!this._boundLoop) this._boundLoop = this._loop.bind(this);
+      requestAnimationFrame(this._boundLoop);
+    }
+
+    clear() {
+      this.running = false;
+      this.canvas.style.transition = 'none';
+      this.canvas.style.opacity = '0';
+      this.ctx.clearRect(0, 0, this.w, this.h);
+    }
+
+    _loop(now) {
+      if (!this.running) return;
+      const elapsed = now - this.startTime;
+      this._draw(elapsed);
+      if (elapsed >= RISE_MS + SPIN_MS) {
+        // Reveal fully drawn. Fade canvas out and hand off to DOM ball.
+        this.running = false;
+        this.onComplete && this.onComplete();
+        requestAnimationFrame(() => {
+          this.canvas.style.transition = 'opacity 0.35s ease';
+          this.canvas.style.opacity = '0';
+          setTimeout(() => {
+            this.canvas.style.transition = 'none';
+            this.ctx.clearRect(0, 0, this.w, this.h);
+          }, 420);
+        });
+        return;
+      }
+      requestAnimationFrame(this._boundLoop);
+    }
+
+    _draw(elapsed) {
+      const ctx = this.ctx;
+      ctx.clearRect(0, 0, this.w, this.h);
+
+      if (elapsed < RISE_MS) {
+        // Phase 1: rise + grow. Ball starts small below the panel bottom edge,
+        // arcs up to center, growing along the way with an ease-in curve so
+        // the "arrival" feels punchy.
+        const t = elapsed / RISE_MS;
+        const yEase = 1 - Math.pow(1 - t, 3);
+        const scaleT = 0.15 + 0.85 * (t * t);
+        const startY = this.h + this.ballRadius * 0.4;
+        const y = startY - (startY - this.centerY) * yEase;
+        this._drawBallFace(this.centerX, y, this.ballRadius * scaleT, 1);
+      } else {
+        // Phase 2: spin around the vertical axis. scaleX = cos(angle) collapses
+        // the ball to edge-on at π/2, past which the number takes over.
+        const t = (elapsed - RISE_MS) / SPIN_MS;
+        const eased = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+        const cosVal = Math.cos(eased * Math.PI);
+        if (cosVal >= 0) {
+          this._drawBallFace(this.centerX, this.centerY, this.ballRadius, cosVal);
+        } else {
+          this._drawNumberFace(this.centerX, this.centerY, -cosVal);
+        }
+      }
+    }
+
+    _drawBallFace(x, y, r, scaleX) {
+      const ctx = this.ctx;
+      if (scaleX <= 0.001 || r <= 0.5) return;
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.scale(scaleX, 1);
+      const grad = ctx.createRadialGradient(-r * 0.4, -r * 0.4, 0, 0, 0, r);
+      grad.addColorStop(0.0, '#ffe598');
+      grad.addColorStop(0.45, '#ffb000');
+      grad.addColorStop(1.0, '#6a4200');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(0, 0, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#0a0a0a';
+      ctx.lineWidth = Math.max(2, r * 0.06);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    _drawNumberFace(x, y, scaleX) {
+      const ctx = this.ctx;
+      if (scaleX <= 0.001) return;
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.scale(scaleX, 1);
+      ctx.shadowColor = 'rgba(255, 176, 0, 0.55)';
+      ctx.shadowBlur = 36;
+      ctx.font = `900 ${Math.round(this.numberFont)}px -apple-system, BlinkMacSystemFont, "Helvetica Neue", Helvetica, Arial, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#ffb000';
+      ctx.fillText(this.numberText, 0, 0);
+      ctx.restore();
+    }
+  }
+
+  const RISE_MS = 700;
+  const SPIN_MS = 550;
+
+  const mixer  = new BallMixer(mixerCanvas);
+  const reveal = new RevealPanel(revealCanvas);
+
+  // Kick off the mixer and pour the initial 75 balls in from above.
+  requestAnimationFrame(() => {
+    mixer.start();
+    mixer.pourIn(TOTAL);
+  });
+
+  // ===== Cage spin sound (Web Audio) =====
   let audioCtx = null;
   function getAudio() {
     if (!audioCtx) {
@@ -428,17 +798,12 @@
     return audioCtx;
   }
 
-  // Build a fresh buffer each call so the click pattern varies between pulls.
   function makeCageBuffer(ctx, dur) {
     const sr  = ctx.sampleRate;
     const len = Math.floor(dur * sr);
     const buf = ctx.createBuffer(1, len, sr);
     const data = buf.getChannelData(0);
-
-    // Continuous low-level rattle (bed of noise).
     for (let i = 0; i < len; i++) data[i] = (Math.random() * 2 - 1) * 0.18;
-
-    // Random short impulses = individual ball clicks against the cage.
     const clicks = Math.floor(dur * 42);
     for (let c = 0; c < clicks; c++) {
       const start    = Math.floor(Math.random() * (len - 600));
@@ -449,52 +814,51 @@
         data[start + i] += (Math.random() * 2 - 1) * env * amp;
       }
     }
-
-    // Soft saturate so peaks stay musical.
     for (let i = 0; i < len; i++) data[i] = Math.tanh(data[i] * 0.9);
     return buf;
   }
 
-  function playCageSound(animDurMs) {
+  // intensity ∈ [0,1]: scales both peak volume and playback rate so the sound
+  // gets quieter and slower as fewer balls remain in the cage.
+  function playCageSound(peakMs, tailMs, intensity) {
     const ctx = getAudio();
     if (!ctx) return;
-    const animDur  = animDurMs / 1000;
-    const fadeIn   = 0.01;   // ~10ms — imperceptible, but avoids click on transient
-    const fadeOut  = 0.7;    // tail length AFTER the animation ends
-    const totalDur = animDur + fadeOut;
-    const peak     = 0.45;
+    intensity = Math.max(0.12, Math.min(1, intensity));
+    const volumeScale = 0.3 + 0.7 * intensity;
+    const rateScale   = 0.7 + 0.3 * intensity;
+    const peakDur  = peakMs / 1000;
+    const tailDur  = tailMs / 1000;
+    const totalDur = peakDur + tailDur;
+    const fadeIn   = 0.01;
+    const peak     = 0.45 * volumeScale;
     const now      = ctx.currentTime;
 
     const src = ctx.createBufferSource();
     src.buffer = makeCageBuffer(ctx, totalDur + 0.2);
 
-    // Bandpass shapes the noise into a metallic clatter.
     const bp = ctx.createBiquadFilter();
     bp.type = 'bandpass';
     bp.frequency.value = 2400;
     bp.Q.value = 0.6;
 
-    // Cage spins at full intensity through the animation, then winds down
-    // once the ball has been picked.
     const g = ctx.createGain();
     g.gain.setValueAtTime(0.0001, now);
-    g.gain.exponentialRampToValueAtTime(peak,    now + fadeIn);
-    g.gain.setValueAtTime(peak,                  now + animDur);
-    g.gain.exponentialRampToValueAtTime(0.0001,  now + animDur + fadeOut);
+    g.gain.exponentialRampToValueAtTime(peak,   now + fadeIn);
+    g.gain.setValueAtTime(peak,                 now + peakDur);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + peakDur + tailDur);
 
-    // Playback rate stays at 1× through the spin, then slows down only after
-    // the ball lands — sounds like the cage coming to a stop.
-    src.playbackRate.setValueAtTime(1.0, now);
-    src.playbackRate.setValueAtTime(1.0, now + animDur);
-    src.playbackRate.linearRampToValueAtTime(0.45, now + animDur + fadeOut);
+    src.playbackRate.setValueAtTime(rateScale, now);
+    src.playbackRate.setValueAtTime(rateScale, now + peakDur);
+    src.playbackRate.linearRampToValueAtTime(rateScale * 0.5, now + peakDur + tailDur);
 
-    src.connect(bp);
-    bp.connect(g);
-    g.connect(ctx.destination);
-
+    src.connect(bp); bp.connect(g); g.connect(ctx.destination);
     src.start(now);
     src.stop(now + totalDur + 0.05);
   }
+
+  // ===== Pull / Clear =====
+  const REVEAL_MS  = RISE_MS + SPIN_MS;  // 1250ms of active reveal animation
+  const SOUND_TAIL = 650;
 
   function pull() {
     if (mixing) return;
@@ -513,40 +877,34 @@
     mixing = true;
     pullBtn.disabled = true;
     clearBtn.disabled = true;
-    ballEl.classList.remove('empty');
-    ballEl.classList.add('mixing');
 
-    const totalDuration = 2200;
-    playCageSound(totalDuration);
-    const start = performance.now();
-    let lastFlip = 0;
+    // Hide the DOM ball text so the reveal canvas isn't fighting with old content.
+    ballEl.classList.remove('revealing');
+    ballEl.classList.add('hidden');
 
-    function frame(now) {
-      const elapsed = now - start;
-      const t = Math.min(elapsed / totalDuration, 1);
+    // Bottom panel: fade one ball out.
+    mixer.removeBall();
 
-      if (t >= 1) {
-        ballEl.classList.remove('mixing');
-        setBall(formatBall(next));
-        drawn.add(next);
-        cellMap[next].classList.add('flashing');
-        flashingNum = next;
-        mixing = false;
-        pullBtn.disabled  = drawn.size >= TOTAL;
-        clearBtn.disabled = false;
-        updateCount();
-        return;
-      }
+    // Intensity based on balls that will be left after this pull.
+    const intensity = mixer.liveCount() / TOTAL;
+    playCageSound(REVEAL_MS, SOUND_TAIL, intensity);
 
-      const interval = 40 + 160 * (t * t);
-      if (now - lastFlip >= interval) {
-        const r = pool[Math.floor(Math.random() * pool.length)];
-        setBall(formatBall(r));
-        lastFlip = now;
-      }
-      requestAnimationFrame(frame);
-    }
-    requestAnimationFrame(frame);
+    // Top panel: rise + spin. Handoff to the DOM ball element at the end.
+    reveal.play(formatBall(next), () => {
+      setBall(formatBall(next));
+      ballEl.classList.remove('hidden');
+      ballEl.classList.remove('revealing');
+      void ballEl.offsetWidth;
+      ballEl.classList.add('revealing');
+
+      drawn.add(next);
+      cellMap[next].classList.add('flashing');
+      flashingNum = next;
+      mixing = false;
+      pullBtn.disabled  = drawn.size >= TOTAL;
+      clearBtn.disabled = false;
+      updateCount();
+    });
   }
 
   function doClearAll() {
@@ -557,13 +915,17 @@
       cell.classList.remove('lit', 'flashing');
     }
     setBall('--', true);
+    ballEl.classList.remove('hidden', 'revealing');
+    reveal.clear();
+    // Pour in only the missing balls (so mid-game clears feel like a top-up).
+    mixer.replenishTo(TOTAL);
     pullBtn.disabled = false;
     updateCount();
   }
 
   function openConfirm() {
     if (mixing) return;
-    if (drawn.size === 0) { doClearAll(); return; }  // nothing to confirm
+    if (drawn.size === 0) { doClearAll(); return; }
     confirmCountEl.textContent = drawn.size;
     modalEl.classList.add('open');
     modalEl.setAttribute('aria-hidden', 'false');
@@ -596,8 +958,8 @@
   });
 
   function toggleFullscreen() {
-    if (!document.fullscreenElement) document.documentElement.requestFullscreen?.();
-    else document.exitFullscreen?.();
+    if (!document.fullscreenElement) document.documentElement.requestFullscreen && document.documentElement.requestFullscreen();
+    else document.exitFullscreen && document.exitFullscreen();
   }
   fsBtn.addEventListener('click', toggleFullscreen);
 </script>
