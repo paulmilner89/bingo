@@ -73,16 +73,7 @@
     position: relative;
   }
 
-  .display::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background: radial-gradient(circle at center, rgba(255, 176, 0, 0.05), transparent 60%);
-    pointer-events: none;
-  }
-
   .display.mixer { padding: 0; }
-  .display.mixer::before { display: none; }
   .display.mixer canvas {
     display: block;
     width: 100%;
@@ -105,9 +96,7 @@
     font-weight: 900;
     color: var(--on);
     letter-spacing: -0.05em;
-    text-shadow:
-      0 0 32px rgba(255, 176, 0, 0.5),
-      0 0 80px rgba(255, 176, 0, 0.25);
+    text-shadow: none;
     line-height: 1;
     font-variant-numeric: tabular-nums;
     will-change: transform, opacity;
@@ -763,11 +752,10 @@
       ctx.save();
       ctx.translate(x, y);
       ctx.scale(scaleX, 1);
-      ctx.shadowColor = 'rgba(255, 176, 0, 0.55)';
-      ctx.shadowBlur = 36;
       ctx.font = `900 ${Math.round(this.numberFont)}px -apple-system, BlinkMacSystemFont, "Helvetica Neue", Helvetica, Arial, sans-serif`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
+      // Clean flat yellow — matches the settled DOM ball for a seamless handoff.
       ctx.fillStyle = '#ffb000';
       ctx.fillText(this.numberText, 0, 0);
       ctx.restore();
