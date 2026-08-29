@@ -451,9 +451,51 @@
       this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       this.w = rect.width;
       this.h = rect.height;
-      this.baseRadius = Math.min(this.w, this.h) * 0.058;
+      const newRadius = Math.min(this.w, this.h) * 0.058;
+      const radiusChanged = newRadius !== this.baseRadius;
+      this.baseRadius = newRadius;
       this.gravity = this.h * 2.6;
+      // Cache one ball sprite; the animation loop blits it per ball instead
+      // of allocating a fresh radial gradient every frame.
+      this._ballSprite = this._createBallSprite(this.baseRadius);
+      if (radiusChanged) {
+        for (const b of this.balls) b.r = this.baseRadius;
+      }
       this._clampBalls();
+    }
+
+    // Pre-render one ball to an offscreen canvas at the current radius.
+    // Called once per resize; the sprite is reused for all 75 draws each frame.
+    _createBallSprite(r) {
+      const pad = Math.max(4, r * 0.15);
+      const size = Math.ceil(2 * r + pad * 2);
+      const dpr = window.devicePixelRatio || 1;
+      const off = document.createElement('canvas');
+      off.width  = Math.round(size * dpr);
+      off.height = Math.round(size * dpr);
+      const sctx = off.getContext('2d');
+      sctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      const cx = size / 2;
+      const cy = size / 2;
+
+      const grad = sctx.createRadialGradient(
+        cx - r * 0.4, cy - r * 0.4, 0,
+        cx,           cy,           r
+      );
+      grad.addColorStop(0.0, '#ffe598');
+      grad.addColorStop(0.45, '#ffb000');
+      grad.addColorStop(1.0, '#6a4200');
+      sctx.fillStyle = grad;
+      sctx.beginPath();
+      sctx.arc(cx, cy, r, 0, Math.PI * 2);
+      sctx.fill();
+
+      sctx.strokeStyle = '#0a0a0a';
+      sctx.lineWidth = Math.max(1.5, r * 0.06);
+      sctx.stroke();
+
+      return { canvas: off, size, offset: cx };
     }
 
     _clampBalls() {
@@ -596,28 +638,17 @@
       }
 
       // Back-to-front by y for layered depth. Same-size balls, but stacking
-      // still reads as depth because of the overlap.
+      // still reads as depth because of the overlap. Draw calls are just
+      // sprite blits — no gradient allocation, no arc/stroke work per ball.
+      const sprite = this._ballSprite;
+      if (!sprite) { ctx.globalAlpha = 1; return; }
       const order = this.balls.slice().sort((a, b) => a.y - b.y);
+      const off = sprite.offset;
+      const size = sprite.size;
       for (const b of order) {
         if (b.y + b.r < 0) continue;  // above canvas, hidden
         ctx.globalAlpha = b.opacity;
-
-        const grad = ctx.createRadialGradient(
-          b.x - b.r * 0.4, b.y - b.r * 0.4, 0,
-          b.x,             b.y,             b.r
-        );
-        grad.addColorStop(0.0, '#ffe598');
-        grad.addColorStop(0.45, '#ffb000');
-        grad.addColorStop(1.0, '#6a4200');
-
-        ctx.fillStyle = grad;
-        ctx.beginPath();
-        ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
-        ctx.fill();
-
-        ctx.strokeStyle = '#0a0a0a';
-        ctx.lineWidth = Math.max(1.5, b.r * 0.06);
-        ctx.stroke();
+        ctx.drawImage(sprite.canvas, b.x - off, b.y - off, size, size);
       }
       ctx.globalAlpha = 1;
     }
