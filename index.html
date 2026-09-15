@@ -1061,6 +1061,10 @@
     modalEl.classList.add('open');
     modalEl.setAttribute('aria-hidden', 'false');
     modalOpen = true;
+    // Focus Cancel so a stray Enter/Space keypress bails out safely instead
+    // of clearing the board. Confirming requires deliberate action (mouse
+    // click, or Tab to Clear Board and press Enter/Space).
+    confirmCancelBtn.focus();
   }
 
   function closeConfirm() {
@@ -1078,8 +1082,10 @@
 
   document.addEventListener('keydown', (e) => {
     if (modalOpen) {
-      if (e.key === 'Escape')      { e.preventDefault(); closeConfirm(); }
-      else if (e.key === 'Enter')  { e.preventDefault(); closeConfirm(); doClearAll(); }
+      if (e.key === 'Escape') { e.preventDefault(); closeConfirm(); }
+      // Enter is intentionally NOT handled here — accidentally pressing
+      // Enter to dismiss a dialog should never clear the board. The user
+      // must click Clear Board, or Tab to it and press Enter/Space.
       return;
     }
     if (e.target instanceof HTMLButtonElement) return;
