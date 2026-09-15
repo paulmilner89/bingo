@@ -73,7 +73,13 @@
     position: relative;
   }
 
-  .display.mixer { padding: 0; }
+  .display.mixer {
+    padding: 0;
+    /* Mixer at ~32% of the left column vertical space, top display takes ~68%.
+       Shrinks the visual weight of the moving mixer and gives the called ball
+       more room to be the focal point. */
+    flex: 0.48;
+  }
   .display.mixer canvas {
     display: block;
     width: 100%;
@@ -274,6 +280,31 @@
     pointer-events: none;
   }
 
+  .wake-status {
+    position: absolute;
+    top: 0.7cqw;
+    left: 0.9cqw;
+    display: flex;
+    align-items: center;
+    gap: 0.5cqw;
+    color: var(--off-text);
+    font-size: 1.1cqh;
+    letter-spacing: 0.15em;
+    font-variant-numeric: tabular-nums;
+    pointer-events: none;
+  }
+  .wake-status .dot {
+    width: 0.8cqh;
+    height: 0.8cqh;
+    border-radius: 50%;
+    background: #444;
+    transition: background 0.3s ease, box-shadow 0.3s ease;
+  }
+  .wake-status.active .dot {
+    background: #4ade80;
+    box-shadow: 0 0 8px rgba(74, 222, 128, 0.7);
+  }
+
   .modal {
     position: absolute;
     inset: 0;
@@ -358,6 +389,9 @@
       <div class="board" id="board"></div>
     </div>
     <div class="count"><span id="count">0</span> / 75</div>
+    <div class="wake-status" id="wakeStatus" title="Screen wake lock — green means the screen won't sleep">
+      <span class="dot"></span>SCREEN
+    </div>
 
     <div class="modal" id="confirmModal" aria-hidden="true">
       <div class="modal-card" role="dialog" aria-labelledby="confirmTitle">
@@ -387,7 +421,54 @@
   const confirmCountEl  = document.getElementById('confirmCount');
   const confirmOkBtn    = document.getElementById('confirmOk');
   const confirmCancelBtn = document.getElementById('confirmCancel');
+  const wakeStatusEl    = document.getElementById('wakeStatus');
   let modalOpen = false;
+
+  // ===== Persistent state (survives refresh) =====
+  const STORAGE_KEY = 'bingoState_v1';
+
+  function saveState() {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        drawn: Array.from(drawn),
+        lastCalled: flashingNum,
+      }));
+    } catch (e) { /* storage disabled or full — silent */ }
+  }
+
+  function loadState() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) { return null; }
+  }
+
+  function clearState() {
+    try { localStorage.removeItem(STORAGE_KEY); } catch (e) {}
+  }
+
+  // ===== Wake Lock (keeps the screen from sleeping mid-event) =====
+  let wakeLock = null;
+  function updateWakeIndicator(active) {
+    wakeStatusEl.classList.toggle('active', active);
+  }
+  async function requestWakeLock() {
+    if (!('wakeLock' in navigator)) { updateWakeIndicator(false); return; }
+    try {
+      wakeLock = await navigator.wakeLock.request('screen');
+      updateWakeIndicator(true);
+      wakeLock.addEventListener('release', () => {
+        updateWakeIndicator(false);
+        wakeLock = null;
+      });
+    } catch (err) {
+      updateWakeIndicator(false);
+    }
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && !wakeLock) requestWakeLock();
+  });
+  requestWakeLock();
 
   const cellMap = {};
   const drawn = new Set();
@@ -451,10 +532,12 @@
       this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       this.w = rect.width;
       this.h = rect.height;
-      const newRadius = Math.min(this.w, this.h) * 0.058;
+      const newRadius = Math.min(this.w, this.h) * 0.055;
       const radiusChanged = newRadius !== this.baseRadius;
       this.baseRadius = newRadius;
-      this.gravity = this.h * 2.6;
+      // Lower gravity + lower launch heights (see _update) makes the mixer
+      // feel like it's idling rather than actively churning.
+      this.gravity = this.h * 1.8;
       // Cache one ball sprite; the animation loop blits it per ball instead
       // of allocating a fresh radial gradient every frame.
       this._ballSprite = this._createBallSprite(this.baseRadius);
@@ -605,8 +688,8 @@
 
         if (b.y + b.r > h) {
           b.y  = h - b.r;
-          b.vy = -this._launchVy(0.3, 1.1);
-          b.vx = (Math.random() - 0.5) * w * 1.1;
+          b.vy = -this._launchVy(0.25, 0.95);
+          b.vx = (Math.random() - 0.5) * w * 0.75;
         }
       }
       // Fade out any ball marked for removal; splice when opacity reaches 0.
@@ -799,10 +882,37 @@
   const mixer  = new BallMixer(mixerCanvas);
   const reveal = new RevealPanel(revealCanvas);
 
-  // Kick off the mixer and pour the initial 75 balls in from above.
+  // Restore game state from a prior session (survives page refresh).
+  const savedState = loadState();
+  if (savedState && Array.isArray(savedState.drawn)) {
+    for (const num of savedState.drawn) {
+      if (num >= 1 && num <= TOTAL) {
+        drawn.add(num);
+        if (cellMap[num]) cellMap[num].classList.add('lit');
+      }
+    }
+    if (savedState.lastCalled && cellMap[savedState.lastCalled]) {
+      flashingNum = savedState.lastCalled;
+      cellMap[savedState.lastCalled].classList.remove('lit');
+      cellMap[savedState.lastCalled].classList.add('flashing');
+      setBall(formatBall(savedState.lastCalled));
+    }
+    updateCount();
+    if (drawn.size >= TOTAL) pullBtn.disabled = true;
+  }
+
+  // Kick off the mixer; pour in only the balls that haven't been called yet.
   requestAnimationFrame(() => {
     mixer.start();
-    mixer.pourIn(TOTAL);
+    mixer.pourIn(TOTAL - drawn.size);
+  });
+
+  // Warn on refresh / close if a game is in progress.
+  window.addEventListener('beforeunload', (e) => {
+    if (drawn.size > 0) {
+      e.preventDefault();
+      e.returnValue = '';
+    }
   });
 
   // ===== Cage spin sound (Web Audio) =====
@@ -923,6 +1033,7 @@
       pullBtn.disabled  = drawn.size >= TOTAL;
       clearBtn.disabled = false;
       updateCount();
+      saveState();
     });
   }
 
@@ -940,6 +1051,7 @@
     mixer.replenishTo(TOTAL);
     pullBtn.disabled = false;
     updateCount();
+    clearState();
   }
 
   function openConfirm() {
